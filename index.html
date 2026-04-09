@@ -848,7 +848,7 @@ function showPage(page){
   if(page==='tecnicos')renderTecnicos();
   if(page==='clientes')renderClientes();
   if(page==='fases')renderFases();
-  if(page==='admin') carregarUsuarios().then(renderAdminUsers);
+  if(page==='admin') renderAdminUsers();
 }
 
 // ============================================================
@@ -1199,35 +1199,40 @@ document.querySelectorAll('.modal-overlay').forEach(o=>{
 // ADMIN — GERENCIAR USUÁRIOS
 // ============================================================
 async function renderAdminUsers() {
-  const usuarios = window._usuariosCache;
-  const admins = getAdmins();
   const tbody = document.getElementById('admin-users-table');
-  const users = Object.keys(usuarios);
+  tbody.innerHTML = `<tr><td colspan="4"><div class="empty-state"><div class="loading-text">Carregando usuários...</div></div></td></tr>`;
 
-  if (!users.length) {
+  const { data, error } = await db.from('usuarios').select('*').eq('ativo', true);
+
+  if (error) {
+    tbody.innerHTML = `<tr><td colspan="4"><div class="empty-state"><div class="empty-state-icon">❌</div><div class="empty-state-text">Erro: ${error.message}</div></div></td></tr>`;
+    return;
+  }
+
+  if (!data || !data.length) {
     tbody.innerHTML = `<tr><td colspan="4"><div class="empty-state"><div class="empty-state-icon">👤</div><div class="empty-state-text">Nenhum usuário encontrado</div></div></td></tr>`;
     return;
   }
 
-  tbody.innerHTML = users.map(u => {
-    const isAdminUser = admins.includes(u);
+  tbody.innerHTML = data.map(u => {
+    const isAdminUser = u.tipo === 'admin';
     const tipo = isAdminUser
       ? `<span class="badge badge-purple">⚙️ Admin</span>`
       : `<span class="badge badge-blue">👤 Usuário</span>`;
-    const canDelete = u !== 'admin';
+    const canDelete = u.login !== 'admin';
     return `<tr>
       <td><div style="display:flex;align-items:center;gap:8px;">
-        <div class="avatar" style="margin-right:0;background:${isAdminUser ? 'linear-gradient(135deg,#6d28d9,#a78bfa)' : 'linear-gradient(135deg,#2563eb,#60a5fa)'};">${u[0].toUpperCase()}</div>
+        <div class="avatar" style="margin-right:0;background:${isAdminUser ? 'linear-gradient(135deg,#6d28d9,#a78bfa)' : 'linear-gradient(135deg,#2563eb,#60a5fa)'};">${u.login[0].toUpperCase()}</div>
         <div>
-          <div style="font-weight:600;font-size:13px;">${u}</div>
+          <div style="font-weight:600;font-size:13px;">${u.login}</div>
           <div style="font-size:11px;color:#9ca3af;">${isAdminUser ? 'Acesso total ao sistema' : 'Acesso padrão'}</div>
         </div>
       </div></td>
       <td>${tipo}</td>
       <td><span class="badge badge-green">● Ativo</span></td>
       <td style="display:flex;gap:6px;align-items:center;">
-        <button class="btn-edit-sm" onclick="openEditUsuarioModal('${u}')">✏️ Editar</button>
-        ${canDelete ? `<button class="btn-danger-sm" onclick="excluirUsuario('${u}')">🗑️ Excluir</button>` : '<span style="font-size:11px;color:#9ca3af;padding:4px 6px;">—</span>'}
+        <button class="btn-edit-sm" onclick="openEditUsuarioModal('${u.login}')">✏️ Editar</button>
+        ${canDelete ? `<button class="btn-danger-sm" onclick="excluirUsuario('${u.login}')">🗑️ Excluir</button>` : '<span style="font-size:11px;color:#9ca3af;padding:4px 6px;">—</span>'}
       </td>
     </tr>`;
   }).join('');
