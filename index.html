@@ -9,7 +9,6 @@
 <link href="https://fonts.googleapis.com/css2?family=Syne:wght@400;600;700;800&family=DM+Sans:wght@300;400;500;600&display=swap" rel="stylesheet">
 <script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.0/chart.umd.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
-<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
 <style>
 *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
 
@@ -612,12 +611,70 @@ textarea { resize: vertical; }
 
 <script>
 // ============================================================
-// SUPABASE — inicializado primeiro
+// SUPABASE — inicializado primeiro (fetch direto, sem SDK)
 // ============================================================
 const SUPABASE_URL = 'https://hiiyhrjsiwipccakqopx.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_PyNf6HAeHbqzNnXMEjKUbw_GrR7Ynpt';
-const { createClient } = supabase;
-const db = createClient(SUPABASE_URL, SUPABASE_KEY);
+
+const db = {
+  _headers: {
+    'Content-Type': 'application/json',
+    'apikey': SUPABASE_KEY,
+    'Authorization': `Bearer ${SUPABASE_KEY}`,
+    'Prefer': 'return=representation'
+  },
+  from(table) {
+    return new DbQuery(table);
+  }
+};
+
+class DbQuery {
+  constructor(table) {
+    this._table = table;
+    this._filters = [];
+    this._order = null;
+    this._single = false;
+  }
+  select(cols = '*') { this._cols = cols; return this; }
+  order(col, opts = {}) { this._order = `${col}${opts.ascending === false ? '.desc' : '.asc'}`; return this; }
+  eq(col, val) { this._filters.push(`${col}=eq.${val}`); return this; }
+  single() { this._single = true; return this; }
+
+  async _run(method, body) {
+    let url = `${SUPABASE_URL}/rest/v1/${this._table}`;
+    const params = [];
+    if (this._cols) params.push(`select=${this._cols}`);
+    if (this._filters.length) this._filters.forEach(f => params.push(f));
+    if (this._order) params.push(`order=${this._order}`);
+    if (params.length) url += '?' + params.join('&');
+
+    const headers = { ...db._headers };
+    if (this._single) headers['Accept'] = 'application/vnd.pgrst.object+json';
+
+    const res = await fetch(url, {
+      method,
+      headers,
+      body: body ? JSON.stringify(body) : undefined
+    });
+
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({ message: res.statusText }));
+      return { data: null, error: err };
+    }
+
+    const text = await res.text();
+    const data = text ? JSON.parse(text) : null;
+    return { data, error: null };
+  }
+
+  then(resolve, reject) {
+    return this._run('GET').then(resolve, reject);
+  }
+
+  async insert(body) { return this._run('POST', body); }
+  async update(body) { return this._run('PATCH', body); }
+  async delete() { return this._run('DELETE'); }
+}
 
 // ============================================================
 // CREDENCIAIS — via Supabase
@@ -816,9 +873,10 @@ async function stopTimer() {
   const cli=document.getElementById('timer-cliente').value;
   if(!tec||!cli){showToast('⚠️','Selecione técnico e cliente');return;}
   const now=new Date(),start=timerStartTime||now;
-  const{data,error}=await db.from('registros').insert({tecnico:tec,cliente:cli,fase:document.getElementById('timer-fase').value,data_inicio:fmtDate(start),hora_inicio:fmtTime(start),data_fim:fmtDate(now),hora_fim:fmtTime(now),duracao:timerSeconds,descricao:document.getElementById('timer-desc').value}).select().single();
+  const{data,error}=await db.from('registros').insert({tecnico:tec,cliente:cli,fase:document.getElementById('timer-fase').value,data_inicio:fmtDate(start),hora_inicio:fmtTime(start),data_fim:fmtDate(now),hora_fim:fmtTime(now),duracao:timerSeconds,descricao:document.getElementById('timer-desc').value});
   if(error){showToast('❌','Erro ao salvar');return;}
-  state.registros.unshift({id:data.id,tecnico:tec,cliente:cli,fase:data.fase,dataInicio:data.data_inicio,horaInicio:data.hora_inicio,dataFim:data.data_fim,horaFim:data.hora_fim,duracao:data.duracao,descricao:data.descricao});
+  const reg = Array.isArray(data) ? data[0] : data;
+  state.registros.unshift({id:reg.id,tecnico:tec,cliente:cli,fase:reg.fase,dataInicio:reg.data_inicio,horaInicio:reg.hora_inicio,dataFim:reg.data_fim,horaFim:reg.hora_fim,duracao:reg.duracao,descricao:reg.descricao});
   timerSeconds=0;timerStartTime=null;updateTimerDisplay();
   document.getElementById('timer-desc').value='';
   ['tecnico','cliente','fase'].forEach(f=>{
@@ -1088,9 +1146,10 @@ async function saveRegistro(){
     const idx=state.registros.findIndex(r=>r.id===editingRegistroId);
     if(idx>=0)state.registros[idx]={...state.registros[idx],tecnico:tec,cliente:cli,fase,dataInicio:di,horaInicio:hi,dataFim:df,horaFim:hf,duracao,descricao:desc};
   } else {
-    const{data,error}=await db.from('registros').insert(payload).select().single();
+    const{data,error}=await db.from('registros').insert(payload);
     if(error){showToast('❌','Erro ao salvar');return;}
-    state.registros.unshift({id:data.id,tecnico:tec,cliente:cli,fase,dataInicio:di,horaInicio:hi,dataFim:df,horaFim:hf,duracao,descricao:desc});
+    const reg = Array.isArray(data) ? data[0] : data;
+    state.registros.unshift({id:reg.id,tecnico:tec,cliente:cli,fase,dataInicio:di,horaInicio:hi,dataFim:df,horaFim:hf,duracao,descricao:desc});
   }
   closeModal('modal-registro');renderAll();showToast('✅','Registro salvo!');
 }
