@@ -867,52 +867,125 @@ async function loadData() {
 async function initApp() {
   await Promise.all([loadData(), carregarUsuarios()]);
   renderAll();
+  timerRestoreFromStorage();
 }
 
 // ============================================================
-// TIMER
+// TIMER — persistente via localStorage
 // ============================================================
-let timerInterval=null,timerSeconds=0,timerRunning=false,timerStartTime=null;
+let timerInterval = null;
+let timerRunning  = false;
+
+function timerGetState() {
+  const s = localStorage.getItem('pf_timer');
+  return s ? JSON.parse(s) : null;
+}
+
+function timerSaveState(running, startTs) {
+  if (running && startTs) {
+    localStorage.setItem('pf_timer', JSON.stringify({ running: true, startTs }));
+  } else {
+    localStorage.removeItem('pf_timer');
+  }
+}
+
+function timerGetElapsed() {
+  const st = timerGetState();
+  if (!st || !st.running) return 0;
+  return Math.floor((Date.now() - st.startTs) / 1000);
+}
+
+function timerRestoreFromStorage() {
+  const st = timerGetState();
+  if (!st || !st.running) return;
+  // Timer estava rodando — retomar
+  timerRunning = true;
+  document.getElementById('btn-play-pause').innerHTML = '⏸';
+  document.getElementById('btn-play-pause').classList.add('timer-running');
+  updateTimerDisplay();
+  timerInterval = setInterval(() => updateTimerDisplay(), 1000);
+}
 
 function toggleTimer() {
   if (!timerRunning) {
-    timerRunning=true; timerStartTime=timerStartTime||new Date();
-    document.getElementById('btn-play-pause').innerHTML='⏸';
+    // Iniciar — salva timestamp de início
+    const st = timerGetState();
+    const startTs = (st && st.startTs) ? st.startTs : Date.now();
+    timerSaveState(true, startTs);
+    timerRunning = true;
+    document.getElementById('btn-play-pause').innerHTML = '⏸';
     document.getElementById('btn-play-pause').classList.add('timer-running');
-    timerInterval=setInterval(()=>{timerSeconds++;updateTimerDisplay();},1000);
+    timerInterval = setInterval(() => updateTimerDisplay(), 1000);
   } else {
-    timerRunning=false;
-    document.getElementById('btn-play-pause').innerHTML='▶';
-    document.getElementById('btn-play-pause').classList.remove('timer-running');
+    // Pausar — salva quanto tempo passou
     clearInterval(timerInterval);
+    timerRunning = false;
+    document.getElementById('btn-play-pause').innerHTML = '▶';
+    document.getElementById('btn-play-pause').classList.remove('timer-running');
+    // Guarda o tempo decorrido até agora como "elapsed acumulado"
+    const elapsed = timerGetElapsed();
+    localStorage.setItem('pf_timer', JSON.stringify({ running: false, elapsed }));
   }
 }
+
 function updateTimerDisplay() {
-  const h=String(Math.floor(timerSeconds/3600)).padStart(2,'0');
-  const m=String(Math.floor((timerSeconds%3600)/60)).padStart(2,'0');
-  const s=String(timerSeconds%60).padStart(2,'0');
-  document.getElementById('timer-display').textContent=`${h}:${m}:${s}`;
+  const st = timerGetState();
+  let secs = 0;
+  if (st) {
+    if (st.running && st.startTs) {
+      secs = Math.floor((Date.now() - st.startTs) / 1000);
+    } else if (!st.running && st.elapsed) {
+      secs = st.elapsed;
+    }
+  }
+  const h = String(Math.floor(secs/3600)).padStart(2,'0');
+  const m = String(Math.floor((secs%3600)/60)).padStart(2,'0');
+  const s = String(secs%60).padStart(2,'0');
+  document.getElementById('timer-display').textContent = `${h}:${m}:${s}`;
 }
+
 async function stopTimer() {
-  if(!timerSeconds)return;
-  clearInterval(timerInterval);timerRunning=false;
-  document.getElementById('btn-play-pause').innerHTML='▶';
+  const st = timerGetState();
+  const secs = st ? (st.running ? Math.floor((Date.now() - st.startTs)/1000) : (st.elapsed||0)) : 0;
+  if (!secs) { showToast('⚠️','Timer zerado'); return; }
+
+  clearInterval(timerInterval);
+  timerRunning = false;
+  document.getElementById('btn-play-pause').innerHTML = '▶';
   document.getElementById('btn-play-pause').classList.remove('timer-running');
-  const tec=document.getElementById('timer-tecnico').value;
-  const cli=document.getElementById('timer-cliente').value;
-  if(!tec||!cli){showToast('⚠️','Selecione técnico e cliente');return;}
-  const now=new Date(),start=timerStartTime||now;
-  const{data,error}=await db.from('registros').insert({tecnico:tec,cliente:cli,fase:document.getElementById('timer-fase').value,data_inicio:fmtDate(start),hora_inicio:fmtTime(start),data_fim:fmtDate(now),hora_fim:fmtTime(now),duracao:timerSeconds,descricao:document.getElementById('timer-desc').value});
-  if(error){showToast('❌','Erro ao salvar');return;}
-  const reg = Array.isArray(data) ? data[0] : data;
-  state.registros.unshift({id:reg.id,tecnico:tec,cliente:cli,fase:reg.fase,dataInicio:reg.data_inicio,horaInicio:reg.hora_inicio,dataFim:reg.data_fim,horaFim:reg.hora_fim,duracao:reg.duracao,descricao:reg.descricao});
-  timerSeconds=0;timerStartTime=null;updateTimerDisplay();
-  document.getElementById('timer-desc').value='';
-  ['tecnico','cliente','fase'].forEach(f=>{
-    document.getElementById(`timer-${f}`).value='';
-    document.getElementById(`timer-${f}-input`).value='';
+
+  const tec = document.getElementById('timer-tecnico').value;
+  const cli = document.getElementById('timer-cliente').value;
+  if (!tec||!cli) { showToast('⚠️','Selecione técnico e cliente'); return; }
+
+  const now   = new Date();
+  const start = st.startTs ? new Date(st.startTs) : new Date(Date.now() - secs*1000);
+
+  const {data,error} = await db.from('registros').insert({
+    tecnico: tec, cliente: cli,
+    fase: document.getElementById('timer-fase').value,
+    data_inicio: fmtDate(start), hora_inicio: fmtTime(start),
+    data_fim: fmtDate(now), hora_fim: fmtTime(now),
+    duracao: secs,
+    descricao: document.getElementById('timer-desc').value
   });
-  renderAll();showToast('✅','Registro salvo!');
+  if (error) { showToast('❌','Erro ao salvar'); return; }
+
+  const reg = Array.isArray(data) ? data[0] : data;
+  if (reg) state.registros.unshift({id:reg.id,tecnico:tec,cliente:cli,fase:reg.fase,dataInicio:reg.data_inicio,horaInicio:reg.hora_inicio,dataFim:reg.data_fim,horaFim:reg.hora_fim,duracao:reg.duracao,descricao:reg.descricao});
+
+  // Limpar timer
+  timerSaveState(false, null);
+  localStorage.removeItem('pf_timer');
+  updateTimerDisplay();
+
+  document.getElementById('timer-desc').value = '';
+  ['tecnico','cliente','fase'].forEach(f => {
+    document.getElementById(`timer-${f}`).value = '';
+    document.getElementById(`timer-${f}-input`).value = '';
+  });
+  renderAll();
+  showToast('✅','Registro salvo!');
 }
 function fmtDate(d){return`${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`;}
 function fmtTime(d){return`${String(d.getHours()).padStart(2,'0')}:${String(d.getMinutes()).padStart(2,'0')}`;}
