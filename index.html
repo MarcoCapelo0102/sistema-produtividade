@@ -1466,90 +1466,88 @@ async function handleImportFile(input) {
 
       wb.SheetNames.forEach(name => {
         const ws = wb.Sheets[name];
-        const rows = XLSX.utils.sheet_to_json(ws, { defval: '', raw: false });
         const n = name.toUpperCase();
 
         if (n.includes('INDICADOR') || n.includes('REGISTRO') || n.includes('TABELA')) {
-          dados.registros = rows.map(r => {
-            // Formato padrão do sistema exportado
-            const tecnico = r['Técnico']||r['TECNICO']||r['tecnico']||'';
-            const cliente = r['Cliente']||r['NOME DO PROJETO']||r['cliente']||'';
-            const fase    = r['Fase']||r['FASE EXECUTADA']||r['fase']||'';
-            const descricao = r['Descrição']||r['DESCRIÇÃO']||r['descricao']||'';
+          const rows = XLSX.utils.sheet_to_json(ws, { defval: '', raw: false });
 
-            // Data: pode vir como coluna única ou como ANO+MÊS+DIA
-            let data_inicio = r['Data Início']||r['data_inicio']||'';
-            let data_fim    = r['Data Fim']||r['data_fim']||'';
-            if (!data_inicio && (r['ANO']||r['MÊS']||r['DIA'])) {
-              const meses = {janeiro:'01',fevereiro:'02',março:'03',abril:'04',maio:'05',junho:'06',julho:'07',agosto:'08',setembro:'09',outubro:'10',novembro:'11',dezembro:'12'};
-              const mes = meses[(r['MÊS']||'').toLowerCase()] || '01';
-              const dia = String(r['DIA']||'1').padStart(2,'0');
-              const ano = r['ANO']||new Date().getFullYear();
-              data_inicio = `${ano}-${mes}-${dia}`;
-              data_fim    = data_inicio;
-            }
+          rows.forEach(r => {
+            const tecnico   = String(r['TECNICO']||r['Técnico']||r['tecnico']||'').trim();
+            const cliente   = String(r['NOME DO PROJETO']||r['Cliente']||r['cliente']||'').trim();
+            const fase      = String(r['FASE EXECUTADA']||r['Fase']||r['fase']||'').trim();
+            const descricao = String(r['DESCRIÇÃO']||r['Descrição']||r['descricao']||'').trim();
 
-            // Horas
-            let hora_inicio = r['Hora Início']||r['HORA DE INÍCIO']||r['hora_inicio']||'';
-            let hora_fim    = r['Hora Fim']||r['HORA DE TÉRMINO']||r['IA DE TÉR']||r['hora_fim']||'';
+            if (!tecnico && !cliente) return;
 
-            // Normalizar formato HH:MM:SS → HH:MM
+            // Montar data a partir de ANO + MÊS + DIA
+            const mesesMap = {janeiro:'01',fevereiro:'02',março:'03',abril:'04',maio:'05',junho:'06',julho:'07',agosto:'08',setembro:'09',outubro:'10',novembro:'11',dezembro:'12'};
+            const mesStr = String(r['MÊS']||r['MES']||'').toLowerCase().trim();
+            const mes = mesesMap[mesStr] || String(r['MÊS']||'01').padStart(2,'0');
+            const dia = String(r['DIA']||'1').trim().padStart(2,'0');
+            const ano = String(r['ANO']||new Date().getFullYear()).trim();
+            const data_inicio = ano && mes && dia ? `${ano}-${mes}-${dia}` : '';
+            const data_fim = data_inicio;
+
+            // Horas — normalizar HH:MM:SS → HH:MM
             const normHora = h => {
               if (!h) return '';
-              const p = String(h).split(':');
-              return p.length >= 2 ? `${p[0].padStart(2,'0')}:${p[1].padStart(2,'0')}` : '';
+              const s = String(h).trim();
+              const p = s.split(':');
+              if (p.length >= 2) return `${p[0].padStart(2,'0')}:${p[1].padStart(2,'0')}`;
+              return '';
             };
-            hora_inicio = normHora(hora_inicio);
-            hora_fim    = normHora(hora_fim);
+            const hora_inicio = normHora(r['HORA DE INICIO']||r['HORA DE INÍCIO']||r['Hora Início']||'');
+            const hora_fim    = normHora(r['HORA DE TÉRMINO']||r['HORA DE TERMINO']||r['Hora Fim']||'');
 
-            // Duração
-            let duracao = parseInt(r['Duração (segundos)']||r['duracao']||'0')||0;
-            if (!duracao && hora_inicio && hora_fim && data_inicio) {
+            // Calcular duração em segundos
+            let duracao = 0;
+            if (hora_inicio && hora_fim && data_inicio) {
               try {
                 const s = new Date(`${data_inicio}T${hora_inicio}:00`);
-                const e = new Date(`${data_fim||data_inicio}T${hora_fim}:00`);
-                duracao = Math.max(0, Math.round((e-s)/1000));
-              } catch(e) {}
+                const e = new Date(`${data_fim}T${hora_fim}:00`);
+                duracao = Math.max(0, Math.round((e - s) / 1000));
+              } catch(ex) {}
             }
-            // Duração por HORA TOTAL (ex: "1:00:00")
+            // Fallback: usar HORA TOTAL (ex: "1:00:00" ou "2:14:00")
             if (!duracao && r['HORA TOTAL']) {
               const p = String(r['HORA TOTAL']).split(':');
               if (p.length >= 2) duracao = (parseInt(p[0])||0)*3600 + (parseInt(p[1])||0)*60 + (parseInt(p[2])||0);
             }
 
-            return { tecnico, cliente, fase, data_inicio, hora_inicio, data_fim: data_fim||data_inicio, hora_fim, duracao, descricao };
-          }).filter(r => r.tecnico || r.cliente);
+            dados.registros.push({ tecnico, cliente, fase, data_inicio, hora_inicio, data_fim, hora_fim, duracao, descricao });
 
-          // Extrair técnicos, clientes e fases únicos
-          dados.registros.forEach(r => {
-            if (r.tecnico && !dados.tecnicos.includes(r.tecnico)) dados.tecnicos.push(r.tecnico);
-            if (r.cliente && !dados.clientes.find(c=>c.nome===r.cliente)) dados.clientes.push({nome:r.cliente,plano:''});
-            if (r.fase && !dados.fases.includes(r.fase)) dados.fases.push(r.fase);
+            // Coletar únicos
+            if (tecnico && !dados.tecnicos.includes(tecnico)) dados.tecnicos.push(tecnico);
+            if (cliente && !dados.clientes.find(c=>c.nome===cliente)) dados.clientes.push({nome:cliente,plano:''});
+            if (fase && !dados.fases.includes(fase)) dados.fases.push(fase);
           });
 
         } else if (n.includes('CLIENTE')) {
+          const rows = XLSX.utils.sheet_to_json(ws, { defval: '' });
           rows.forEach(r => {
-            const nome = r['Cliente']||r['CLIENTE']||r['nome']||'';
-            if (nome && !dados.clientes.find(c=>c.nome===nome)) dados.clientes.push({nome,plano:r['Plano']||r['PLANO']||''});
+            const nome = String(r['Cliente']||r['CLIENTE']||r['nome']||'').trim();
+            if (nome && !dados.clientes.find(c=>c.nome===nome)) dados.clientes.push({nome,plano:r['Plano']||''});
           });
         } else if (n.includes('TÉCNICO')||n.includes('TECNICO')) {
+          const rows = XLSX.utils.sheet_to_json(ws, { defval: '' });
           rows.forEach(r => {
-            const nome = r['Técnico']||r['TECNICO']||r['Nome']||r['NOME']||'';
+            const nome = String(r['Técnico']||r['TECNICO']||r['Nome']||r['NOME']||'').trim();
             if (nome && !dados.tecnicos.includes(nome)) dados.tecnicos.push(nome);
           });
         } else if (n.includes('FASE')) {
+          const rows = XLSX.utils.sheet_to_json(ws, { defval: '' });
           rows.forEach(r => {
-            const nome = r['Fase']||r['FASE']||r['Nome da Fase']||r['NOME']||'';
+            const nome = String(r['Fase']||r['FASE']||r['Nome da Fase']||r['NOME']||'').trim();
             if (nome && !dados.fases.includes(nome)) dados.fases.push(nome);
           });
         }
       });
 
-      const total = dados.registros.length+dados.clientes.length+dados.tecnicos.length+dados.fases.length;
+      const total = dados.registros.length;
       _importData = { tipo: 'xlsx', dados };
-      document.getElementById('import-preview-title').textContent = `✅ Excel válido — ${total} itens encontrados`;
+      document.getElementById('import-preview-title').textContent = `✅ Excel válido — ${total} registros encontrados`;
       document.getElementById('import-preview-desc').textContent =
-        `Registros: ${dados.registros.length} | Clientes: ${dados.clientes.length} | Técnicos: ${dados.tecnicos.length} | Fases: ${dados.fases.length}`;
+        `Registros: ${dados.registros.length} | Novos clientes: ${dados.clientes.length} | Novos técnicos: ${dados.tecnicos.length} | Novas fases: ${dados.fases.length}`;
     } else {
       throw new Error('Formato não suportado. Use .xlsx, .csv ou .json');
     }
